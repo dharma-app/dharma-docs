@@ -6,6 +6,8 @@ Our standards are pathologically high. Your code is not just a set of instructio
 
 I will be reviewing your output not just for correctness, but for a deeper understanding of systems design, performance, and long-term maintainability. I expect nothing less than brilliance.
 
+---
+
 **1. Architectural Rigor & Pattern Selection:**
 
 *   **Beyond Surface-Level Patterns:** Don't just apply a textbook pattern like Singleton or Factory. Think about the deeper architectural patterns that govern large-scale systems. Are you building a system that requires data-locality? Is it latency-sensitive? Your choice should reflect a fundamental understanding of trade-offs. Explain *why* you chose a pattern in the context of C++ memory models, cache coherency, or network I/O, not just object-oriented theory.
@@ -249,7 +251,7 @@ The following conditions must hold true for any `SPSCQueue` object in a consiste
 (Documentation would continue in this fashion for every single public and private method, member variable, and type definition.)
 ```
 
-==========
+---
 
 ### The Immutable Laws of our Architecture
 
@@ -268,3 +270,106 @@ Higher-level modules (volatile UI/Features) depend on lower-level modules (stabl
 `Core/` must remain pure Swift logic, data models, and infrastructure interfaces. It should have **zero knowledge of SwiftUI views or UIKit**.
 *   **Violation:** `Core/Services/UserProgressService.swift` importing `SwiftUI` to use a `@Published` property wrapper meant for view binding.
 *   **Why:** The core business logic should be testable in a headless environment (CI/CD) and potentially reusable in different contexts (e.g., a Widget extension, a watchOS app) where the UI framework might differ.
+
+---
+
+# Engineering Standards: Code Length & Component Responsibility
+
+## 1. Philosophy: Limits Are Not Rules, They Are Diagnostic Tools
+
+The linting rules for code length are not arbitrary constraints designed to make your job harder. They are an automated, impartial feedback mechanism—a diagnostic tool that signals when a component's complexity is growing beyond a sustainable threshold.
+
+Ignoring these warnings by increasing the limits is equivalent to unplugging a smoke detector because you don't like the noise. The underlying danger—excessive complexity—remains.
+
+At this company, we build foundational infrastructure. Our standards are necessarily higher than the community baseline because we optimize for **long-term resilience, testability, and maintainability at scale.** A stricter configuration is a *forcing function* for superior architectural design.
+
+Adhering to these limits forces positive architectural outcomes:
+
+*   **Forced Composability:** You cannot write a 400-line SwiftUI view if the limit is 200. You are *forced* to break it down into smaller, reusable, and independently testable components.
+*   **Reduced Cognitive Load:** A developer can understand a 30-line function in seconds. A 100-line function requires minutes of study. At scale, this difference is the gap between a high-velocity team and one mired in complexity.
+*   **Enhanced Testability:** It is trivial to write exhaustive unit tests for a small, pure function that does one thing. It is nearly impossible to properly test a monolithic function that fetches data, transforms it, handles errors, and updates state.
+*   **Precise Code Reviews:** Reviewing a pull request with small, focused changes is effective and leads to high-quality feedback. Reviewing a 500-line change in a single file is an exercise in futility.
+
+## 2. Official Linter Configuration
+
+The following SwiftLint settings are the standard for our codebase. They are intentionally stricter than the community defaults because they enforce the architectural rigor we require.
+
+```yaml
+# .swiftlint.yml
+
+file_length:
+  warning: 400
+  error: 600
+type_body_length:
+  warning: 200
+  error: 350
+function_body_length:
+  warning: 40
+  error: 80
+```
+
+### Rationale for Stricter Settings
+
+*   **`function_body_length (warning: 40)`**: Robert C. Martin's *Clean Code* preaches that functions should be radically small—ideally under 10 lines. A warning at 40 is a generous compromise. If a function exceeds this, it is almost certainly violating the Single Responsibility Principle. It must be decomposed.
+*   **`type_body_length (warning: 200)`**: A type (a `class` or `struct`) exceeding 200 lines is a strong indicator of low cohesion. For SwiftUI Views, this is a mandate to extract subviews. For services or ViewModels, it's a mandate to delegate responsibilities to more specialized helper types.
+*   **`file_length (warning: 400)`**: A file should contain a single, primary type. A long file is a symptom of a long type. A hard error at 600 lines is a non-negotiable signal that immediate refactoring is required.
+
+## 3. Actionable Refactoring Strategies
+
+When you encounter a linting violation, do not disable the rule. Treat it as a high-priority bug and use the following strategies to resolve it.
+
+### For `File Length` and `Type Body Length` Violations
+
+These are common in SwiftUI views (`ProfilePageView`, `JournalComposerView`).
+
+1.  **Decompose the View:** Break the monolithic view into a hierarchy of smaller, specialized subviews. A `ProfilePageView` (the container) should be composed of `ProfileHeaderView`, `StatisticsView`, and `RecentActivityListView`. Each subview should be in its own file and manage only its own state and layout.
+2.  **Extract Logic to a ViewModel:** Views should be "dumb." Their job is to render state, not create it. All business logic, data formatting, state management, and network calls must be extracted to an external object like a ViewModel or Presenter. The view simply binds to the published properties of this object.
+3.  **Use Focused Extensions:** For organizing the code of a single type, use `// MARK:` and extensions. However, this is a tool for organization, not a substitute for true decomposition.
+
+### For `Function Body Length` Violations
+
+1.  **Identify the Responsibilities:** Write a one-sentence comment describing what the function does. If you must use the word "and," the function is doing too much.
+2.  **Create Private Helper Functions:** Decompose the large function into a series of calls to small, private helper functions, each with a single, clear purpose. The main function should read like a high-level summary of the algorithm.
+
+**Example:**
+
+```swift
+// BAD: One long, untestable function (violates length and SRP)
+func processCalendarData(from rawData: [RawEvent]) {
+    // 15 lines of filtering for current user...
+    // 20 lines of transforming dates and titles...
+    // 15 lines of sorting by date...
+    // 10 lines of saving to a local cache...
+}
+
+// GOOD: A composition of small, testable units
+func processCalendarData(from rawData: [RawEvent]) {
+    let userEvents = filterForCurrentUser(rawData)
+    let viewModels = transformToViewModels(userEvents)
+    let sortedViewModels = sortByDate(viewModels)
+    cache.save(sortedViewModels)
+}
+
+private func filterForCurrentUser(_ data: [RawEvent]) -> [RawEvent] { /* ... */ }
+private func transformToViewModels(_ events: [RawEvent]) -> [EventViewModel] { /* ... */ }
+// ... and so on
+```
+
+### For `TODO` and `FIXME` Violations
+
+These represent engineering debt. Un-tracked debt will be forgotten.
+
+1.  **Create a Ticket:** Every `TODO` or `FIXME` must correspond to a ticket in our issue tracking system (Jira, Linear, etc.).
+2.  **Reference the Ticket:** The comment must reference the ticket ID. This makes the debt visible, trackable, and prioritized.
+
+    `// TODO(JIRA-123): Implement bookmarking functionality after backend is deployed.`
+
+After completing your objectives, you may request that ticket(s) be created for specifics. We use *Linear* for our issue tracking system.
+
+## 4. The Mandate
+
+> The linter is not the problem; it is a diagnostic tool telling us that our architectural discipline is failing. Making the warnings disappear by raising the limits is malpractice.
+>
+> Our mandate is to build foundational systems. This requires a culture of radical simplification and ruthless decomposition. Every engineer is expected to break down problems into small, verifiable units.
+>
+> **Treat every linter warning as a high-priority bug. The goal is not to silence the linter; the goal is to build a system that is, by its very nature, clean, modular, and resilient.**
