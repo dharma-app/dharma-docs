@@ -251,7 +251,7 @@ The following conditions must hold true for any `SPSCQueue` object in a consiste
 
 ==========
 
-### The Immutable Laws of the Dharma Architecture
+### The Immutable Laws of our Architecture
 
 **1. The Law of Feature Isolation (Horizontal Separation)**
 Code within one feature directory **must never** import or utilize code from another feature directory.
